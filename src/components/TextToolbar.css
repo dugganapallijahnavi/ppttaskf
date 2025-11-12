@@ -176,6 +176,37 @@
   position: relative;
 }
 
+.toolbar-item.spacer {
+  flex: 1 1 auto;
+}
+
+.toolbar-item.more {
+  margin-left: auto;
+}
+
+.text-toolbar-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  border-radius: 7px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: #ffffff;
+  color: #1f2937;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.text-toolbar-more:hover,
+.text-toolbar-more:focus-visible {
+  background: #e6e4e4;
+  border-color: rgba(0, 0, 0, 0.15);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
 .text-alignment-trigger {
   display: inline-flex;
   align-items: center;

@@ -106,6 +106,42 @@
   font-weight: 600;
 }
 
+.toolbar-button.icon-button .image-icon {
+  width: 16px;
+  height: 12px;
+  border-radius: 2px;
+  display: inline-flex;
+  position: relative;
+  background: linear-gradient(135deg, #f97316 0%, #facc15 60%, #22c55e 100%);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+  align-items: center;
+  justify-content: center;
+}
+
+.toolbar-button.icon-button .image-icon::before {
+  content: '';
+  width: 10px;
+  height: 6px;
+  border-radius: 1.5px;
+  background: rgba(255, 255, 255, 0.85);
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.05);
+}
+
+.toolbar-button.icon-button .image-icon::after {
+  content: '';
+  width: 8px;
+  height: 5px;
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.85), rgba(59, 130, 246, 0.8));
+  clip-path: polygon(0 100%, 40% 45%, 65% 75%, 100% 0, 100% 100%);
+  border-radius: 1px;
+}
+
 .toolbar-button.icon-button .button-text {
   font-size: 14px;
   font-weight: 500;

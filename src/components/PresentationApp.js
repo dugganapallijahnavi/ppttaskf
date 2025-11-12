@@ -5,12 +5,10 @@ import { Rnd } from 'react-rnd';
 import ChartComponent from './ChartComponent';
 import ChartDataEditor from './ChartDataEditor';
 import ImageComponent from './ImageComponent';
-import TableComponent from './TableComponent';
 import RichTextEditor from './RichTextEditor';
 import TextToolbar from './TextToolbar';
 import ShapeToolbar from './ShapeToolbar';
 import ChartToolbar from './ChartToolbar';
-import TableToolbar from './TableToolbar';
 import ImageToolbar from './ImageToolbar';
 
 import SlidePanel from './SlidePanel';
@@ -43,9 +41,6 @@ const TEXT_TOOLBAR_VERTICAL_OFFSET = 70;
 const MIN_TEXT_WIDTH = 120;
 const MIN_TEXT_HEIGHT = 40;
 const MIN_ELEMENT_SIZE = 60;
-const MIN_CHART_HEIGHT = 120;
-const MIN_TABLE_WIDTH = 200;
-const MIN_TABLE_HEIGHT = 120;
 
 const CHART_COLOR_PALETTE = [
   '#111111',
@@ -70,6 +65,8 @@ const chartTypeLabels = {
   pie: 'Pie chart',
   columnLine: 'Column + Line chart'
 };
+
+const SLIDESHOW_AUTO_ADVANCE_MS = 5000;
 
 const createId = (prefix) =>
   `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
@@ -445,7 +442,6 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
   const [toolbarPosition, setToolbarPosition] = useState({ x: 0, y: 0 });
   const [shapeToolbarPosition, setShapeToolbarPosition] = useState(null);
   const [chartToolbarPosition, setChartToolbarPosition] = useState(null);
-  const [tableToolbarPosition, setTableToolbarPosition] = useState(null);
   const [imageToolbarPosition, setImageToolbarPosition] = useState(null);
   const [editingImage, setEditingImage] = useState(null);
   const [chartEditorId, setChartEditorId] = useState(null);
@@ -453,6 +449,9 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
   const [editingTextId, setEditingTextId] = useState(null);
   const [textEditors, setTextEditors] = useState({});
   const [thumbnails, setThumbnails] = useState({});
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth || 1440 : 1440
+  );
   const clearThumbnail = useCallback((slideId) => {
     if (!slideId) {
       return;
@@ -481,6 +480,8 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
     setPendingInsertPos(null);
   }, []);
   const slideRef = useRef(null);
+  const slideshowRef = useRef(null);
+  const slideshowIntervalRef = useRef(null);
   const elementRefs = useRef({});
   const thumbnailCaptureFrame = useRef(null);
   const thumbnailDebounceTimeout = useRef(null);
@@ -491,9 +492,36 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
   const endMutatingTimeoutRef = useRef(null);
   const [interactingElementId, setInteractingElementId] = useState(null);
   const slidesRef = useRef(slides);
+  const [isSlideshowPaused, setIsSlideshowPaused] = useState(false);
   const historyRef = useRef(history);
   const historyIndexRef = useRef(historyIndex);
   const persistenceTimeoutRef = useRef(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const handleResize = () => {
+      setViewportWidth(window.innerWidth || 1440);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const textScale = useMemo(() => {
+    if (viewportWidth <= 900) {
+      return 0.72;
+    }
+    if (viewportWidth <= 1200) {
+      return 0.82;
+    }
+    if (viewportWidth <= 1440) {
+      return 0.9;
+    }
+    return 1;
+  }, [viewportWidth]);
 
   // Add to history
   const addToHistory = useCallback((nextSlides) => {
@@ -533,7 +561,6 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
       setShapeToolbarPosition(null);
       setChartToolbarPosition(null);
       setImageToolbarPosition(null);
-      setTableToolbarPosition(null);
       logPerf('handleUndo', t0);
     }
   }, [history, historyIndex]);
@@ -557,7 +584,6 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
       setShapeToolbarPosition(null);
       setChartToolbarPosition(null);
       setImageToolbarPosition(null);
-      setTableToolbarPosition(null);
       logPerf('handleRedo', t0);
     }
   }, [history, historyIndex]);
@@ -668,28 +694,6 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
     []
   );
 
-  const updateTableToolbarPosition = useCallback(
-    (elementId) => {
-      const slideNode = slideRef.current;
-      const elementNode = elementRefs.current[elementId];
-      if (!slideNode || !elementNode) {
-        return;
-      }
-
-      const slideRect = slideNode.getBoundingClientRect();
-      const elementRect = elementNode.getBoundingClientRect();
-      const centerX = elementRect.left - slideRect.left + elementRect.width / 2;
-      const clampedX = Math.max(100, Math.min(centerX, slideRect.width - 100));
-      const relativeTop = Math.max(elementRect.top - slideRect.top - 56, 8);
-
-      setTableToolbarPosition({
-        x: clampedX,
-        y: relativeTop
-      });
-    },
-    []
-  );
-
   const updateImageToolbarPosition = useCallback(
     (elementId) => {
       const slideNode = slideRef.current;
@@ -713,6 +717,18 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
   );
 
   // Keyboard navigation and click outside
+  const startSlideshow = useCallback(() => {
+    if (slidesRef.current?.length) {
+      setCurrentSlideIndex(0);
+    }
+    setIsSlideshowPaused(false);
+    setIsSlideshow(true);
+  }, []);
+
+  const toggleSlideshowPause = useCallback(() => {
+    setIsSlideshowPaused((prev) => !prev);
+  }, []);
+
   useEffect(() => {
     const handleKeyDown = (e) => {
       // Undo/Redo shortcuts
@@ -740,7 +756,12 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
         setCurrentSlideIndex(currentSlideIndex - 1);
       } else if (e.key === 'F5') {
         e.preventDefault();
-        setIsSlideshow(true);
+        if (!isSlideshow) {
+          startSlideshow();
+        }
+      } else if ((e.key === ' ' || e.key === 'Spacebar') && isSlideshow) {
+        e.preventDefault();
+        toggleSlideshowPause();
       } else if (e.key === 'Escape') {
         if (isSlideshow) {
           setIsSlideshow(false);
@@ -781,8 +802,122 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
     pendingInsert,
     cancelPendingInsert,
     handleUndo,
-    handleRedo
+    handleRedo,
+    startSlideshow,
+    toggleSlideshowPause,
+    isSlideshowPaused
   ]);
+
+  useEffect(() => {
+    if (!isSlideshow) {
+      if (slideshowIntervalRef.current) {
+        clearInterval(slideshowIntervalRef.current);
+        slideshowIntervalRef.current = null;
+      }
+      if (isSlideshowPaused) {
+        setIsSlideshowPaused(false);
+      }
+      const activeFullscreenEl = document.fullscreenElement;
+      const containerNode = slideshowRef.current;
+      if (activeFullscreenEl && (activeFullscreenEl === containerNode || activeFullscreenEl === document.documentElement)) {
+        document.exitFullscreen().catch((error) => {
+          console.error('Failed to exit fullscreen', error);
+        });
+      }
+      return;
+    }
+
+    const containerNode = slideshowRef.current;
+    const activeFullscreenEl = document.fullscreenElement;
+    if (containerNode && containerNode.requestFullscreen) {
+      if (activeFullscreenEl !== containerNode) {
+        containerNode.requestFullscreen().catch((error) => {
+          console.error('Failed to enter fullscreen', error);
+        });
+      }
+    } else if (!activeFullscreenEl && document.documentElement.requestFullscreen) {
+      document.documentElement.requestFullscreen().catch((error) => {
+        console.error('Failed to enter fullscreen', error);
+      });
+    }
+
+    if (slideshowIntervalRef.current) {
+      clearInterval(slideshowIntervalRef.current);
+    }
+
+    const stopSlideshow = (exit = true) => {
+      if (slideshowIntervalRef.current) {
+        clearInterval(slideshowIntervalRef.current);
+        slideshowIntervalRef.current = null;
+      }
+      if (exit) {
+        setIsSlideshow(false);
+      }
+    };
+
+    const scheduleNextAdvance = () => {
+      if (slideshowIntervalRef.current) {
+        clearInterval(slideshowIntervalRef.current);
+      }
+
+      if (isSlideshowPaused) {
+        return;
+      }
+
+      slideshowIntervalRef.current = setInterval(() => {
+        setCurrentSlideIndex((prevIndex) => {
+          const total = slidesRef.current?.length || 0;
+          if (total <= 1) {
+            stopSlideshow();
+            return prevIndex;
+          }
+          const nextIndex = prevIndex + 1;
+          if (nextIndex >= total) {
+            stopSlideshow();
+            return prevIndex;
+          }
+          return nextIndex;
+        });
+      }, SLIDESHOW_AUTO_ADVANCE_MS);
+    };
+
+    scheduleNextAdvance();
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        if (slideshowIntervalRef.current) {
+          clearInterval(slideshowIntervalRef.current);
+          slideshowIntervalRef.current = null;
+        }
+      } else {
+        scheduleNextAdvance();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      if (slideshowIntervalRef.current) {
+        clearInterval(slideshowIntervalRef.current);
+        slideshowIntervalRef.current = null;
+      }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [isSlideshow, isSlideshowPaused, slides.length, setIsSlideshow]);
+
+  useEffect(() => () => {
+    if (slideshowIntervalRef.current) {
+      clearInterval(slideshowIntervalRef.current);
+      slideshowIntervalRef.current = null;
+    }
+    const activeFullscreenEl = document.fullscreenElement;
+    const containerNode = slideshowRef.current;
+    if (activeFullscreenEl && (activeFullscreenEl === containerNode || activeFullscreenEl === document.documentElement)) {
+      document.exitFullscreen().catch((error) => {
+        console.error('Failed to exit fullscreen', error);
+      });
+    }
+  }, []);
 
   const addSlide = useCallback((layoutId = 'title', insertIndex) => {
     const targetIndex = Number.isFinite(insertIndex) ? insertIndex : slides.length;
@@ -992,20 +1127,42 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
   }, [scheduleThumbnailCapture]);
 
   const updateElement = useCallback((elementId, updates) => {
+    if (!elementId || !updates || typeof updates !== 'object') {
+      return;
+    }
+
     let targetSlideId = null;
     let shouldClearThumbnail = false;
+    let didMutate = false;
 
     setSlides((prevSlides) => {
-      const nextSlides = [...prevSlides];
-      const slide = nextSlides[currentSlideIndex];
+      const slide = prevSlides?.[currentSlideIndex];
       if (!slide) {
         return prevSlides;
       }
-      targetSlideId = slide.id;
+
       const updatedContent = (slide.content || []).map((item) => {
         if (item.id !== elementId) {
           return item;
         }
+
+        const keys = Object.keys(updates);
+        if (!keys.length) {
+          return item;
+        }
+
+        let needsUpdate = false;
+        for (const key of keys) {
+          if (!Object.is(item[key], updates[key])) {
+            needsUpdate = true;
+            break;
+          }
+        }
+
+        if (!needsUpdate) {
+          return item;
+        }
+
         if (
           item.type === 'image' &&
           ((Object.prototype.hasOwnProperty.call(updates, 'src') && updates.src !== item.src) ||
@@ -1013,11 +1170,24 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
         ) {
           shouldClearThumbnail = true;
         }
+
+        didMutate = true;
         return { ...item, ...updates };
       });
+
+      if (!didMutate) {
+        return prevSlides;
+      }
+
+      targetSlideId = slide.id;
+      const nextSlides = [...prevSlides];
       nextSlides[currentSlideIndex] = { ...slide, content: updatedContent };
       return nextSlides;
     });
+
+    if (!didMutate) {
+      return;
+    }
 
     setSelectedElement((current) =>
       current && current.id === elementId ? { ...current, ...updates } : current
@@ -1110,26 +1280,18 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
         setHoveredElement(element.id);
         updateTextToolbarPosition(element.id);
         setShapeToolbarPosition(null);
-        setTableToolbarPosition(null);
         setImageToolbarPosition(null);
       } else if (element.type === 'shape') {
         updateShapeToolbarPosition(element.id);
         setToolbarPosition({ x: 0, y: 0 });
-        setTableToolbarPosition(null);
-        setImageToolbarPosition(null);
-      } else if (element.type === 'table') {
-        updateTableToolbarPosition(element.id);
-        setToolbarPosition({ x: 0, y: 0 });
-        setShapeToolbarPosition(null);
         setImageToolbarPosition(null);
       } else if (element.type === 'image') {
         updateImageToolbarPosition(element.id);
         setToolbarPosition({ x: 0, y: 0 });
         setShapeToolbarPosition(null);
-        setTableToolbarPosition(null);
       }
     },
-    [pendingInsert, updateShapeToolbarPosition, updateTextToolbarPosition, updateTableToolbarPosition, updateImageToolbarPosition]
+    [pendingInsert, updateShapeToolbarPosition, updateTextToolbarPosition, updateImageToolbarPosition]
   );
 
   const handleDragStart = useCallback(
@@ -1148,15 +1310,9 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
         setHoveredElement(element.id);
         updateTextToolbarPosition(element.id);
         setShapeToolbarPosition(null);
-        setTableToolbarPosition(null);
       } else if (element.type === 'shape') {
         updateShapeToolbarPosition(element.id);
         setToolbarPosition({ x: 0, y: 0 });
-        setTableToolbarPosition(null);
-      } else if (element.type === 'table') {
-        updateTableToolbarPosition(element.id);
-        setToolbarPosition({ x: 0, y: 0 });
-        setShapeToolbarPosition(null);
       }
       setEditingTextId((current) => (current === element.id ? null : current));
       if (typeof document !== 'undefined') {
@@ -1164,7 +1320,7 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
         document.body.style.cursor = 'grabbing';
       }
     },
-    [pendingInsert, updateShapeToolbarPosition, updateTextToolbarPosition, updateTableToolbarPosition]
+    [pendingInsert, updateShapeToolbarPosition, updateTextToolbarPosition]
   );
 
   const pushSnapshot = useCallback(() => {
@@ -1194,8 +1350,6 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
         updateTextToolbarPosition(element.id);
       } else if (element.type === 'shape') {
         updateShapeToolbarPosition(element.id);
-      } else if (element.type === 'table') {
-        updateTableToolbarPosition(element.id);
       }
       updateElement(element.id, {
         x: Math.round(position.x),
@@ -1211,7 +1365,7 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
         endMutatingTimeoutRef.current = null;
       }, 200);
     },
-    [pendingInsert, updateElement, updateShapeToolbarPosition, updateTextToolbarPosition, updateTableToolbarPosition, pushSnapshot]
+    [pendingInsert, updateElement, updateShapeToolbarPosition, updateTextToolbarPosition, pushSnapshot]
   );
 
   const handleResizeStart = useCallback(
@@ -1230,15 +1384,9 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
         setHoveredElement(element.id);
         updateTextToolbarPosition(element.id);
         setShapeToolbarPosition(null);
-        setTableToolbarPosition(null);
       } else if (element.type === 'shape') {
         updateShapeToolbarPosition(element.id);
         setToolbarPosition({ x: 0, y: 0 });
-        setTableToolbarPosition(null);
-      } else if (element.type === 'table') {
-        updateTableToolbarPosition(element.id);
-        setToolbarPosition({ x: 0, y: 0 });
-        setShapeToolbarPosition(null);
       }
       setEditingTextId((current) => (current === element.id ? null : current));
       if (typeof document !== 'undefined') {
@@ -1246,7 +1394,7 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
         document.body.style.cursor = 'nwse-resize';
       }
     },
-    [pendingInsert, updateShapeToolbarPosition, updateTextToolbarPosition, updateTableToolbarPosition]
+    [pendingInsert, updateShapeToolbarPosition, updateTextToolbarPosition]
   );
 
   const handleResizeStop = useCallback(
@@ -1265,67 +1413,6 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
         updateTextToolbarPosition(element.id);
       } else if (element.type === 'shape') {
         updateShapeToolbarPosition(element.id);
-      } else if (element.type === 'table') {
-        const tableBefore = element.tableData || {};
-        const colWidths = Array.isArray(tableBefore.colWidths)
-          ? [...tableBefore.colWidths]
-          : [];
-        const rowHeights = Array.isArray(tableBefore.rowHeights)
-          ? [...tableBefore.rowHeights]
-          : [];
-
-        const sumValues = (values) =>
-          values.reduce((sum, value) => sum + (Number(value) || 0), 0);
-
-        const previousWidth = colWidths.length
-          ? sumValues(colWidths)
-          : element.width || ref.offsetWidth;
-        const previousHeight = rowHeights.length
-          ? sumValues(rowHeights)
-          : element.height || ref.offsetHeight;
-
-        const nextWidth = Math.max(MIN_TABLE_WIDTH, Math.round(ref.offsetWidth));
-        const nextHeight = Math.max(MIN_TABLE_HEIGHT, Math.round(ref.offsetHeight));
-
-        const distributeSizes = (values, prevTotal, nextTotal, count, minimum) => {
-          const length = count || values.length;
-          if (!length) {
-            return [];
-          }
-          if (!values.length || !Number.isFinite(prevTotal) || prevTotal <= 0) {
-            const base = Math.max(minimum, Math.round(nextTotal / Math.max(length, 1)));
-            return Array.from({ length }, () => base);
-          }
-          return values.map((value) => {
-            const numeric = Number(value) || 0;
-            const ratio = prevTotal > 0 ? numeric / prevTotal : 1 / values.length;
-            return Math.max(minimum, Math.round(ratio * nextTotal));
-          });
-        };
-
-        const updatedColWidths = distributeSizes(
-          colWidths,
-          previousWidth,
-          nextWidth,
-          tableBefore.cols || colWidths.length,
-          48
-        );
-        const updatedRowHeights = distributeSizes(
-          rowHeights,
-          previousHeight,
-          nextHeight,
-          tableBefore.rows || rowHeights.length,
-          30
-        );
-
-        updateElement(element.id, {
-          tableData: {
-            ...tableBefore,
-            colWidths: updatedColWidths,
-            rowHeights: updatedRowHeights
-          }
-        });
-        updateTableToolbarPosition(element.id);
       }
 
       if (endMutatingTimeoutRef.current) {
@@ -1337,7 +1424,7 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
         endMutatingTimeoutRef.current = null;
       }, 200);
     },
-    [pendingInsert, updateElement, updateShapeToolbarPosition, updateTextToolbarPosition, updateTableToolbarPosition, pushSnapshot]
+    [pendingInsert, updateElement, updateShapeToolbarPosition, updateTextToolbarPosition, pushSnapshot]
   );
 
   const deleteElement = useCallback((elementId) => {
@@ -1364,7 +1451,7 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
       setEditingImage(null);
     }
     setChartEditorId((current) => (current === elementId ? null : current));
-    
+
     // Clean up text editor instance
     setTextEditors((prev) => {
       const { [elementId]: removed, ...rest } = prev;
@@ -1698,39 +1785,6 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
       }
       setActiveDropdown(null);
       return;
-    } else if (type === 'table') {
-      const rows = options.rows || 3;
-      const cols = options.cols || 3;
-
-      const baseWidth = Math.max(MIN_TABLE_WIDTH, cols * 100);
-      const baseHeight = Math.max(MIN_TABLE_HEIGHT, rows * 50);
-      const columnWidth = Math.round(baseWidth / Math.max(cols, 1));
-      const rowHeight = Math.round(baseHeight / Math.max(rows, 1));
-      
-      newElement = {
-        id,
-        type: 'table',
-        x: centerX,
-        y: centerY,
-        width: baseWidth,
-        height: baseHeight,
-        tableData: {
-          rows: rows,
-          cols: cols,
-          cells: Array(rows).fill(null).map(() => Array(cols).fill('')),
-          headerRow: true,
-          headerCol: false,
-          borderStyle: 'all',
-          borderColor: '#d1d5db',
-          headerBgColor: '#f3f4f6',
-          cellBgColor: '#ffffff',
-          textColor: '#111827',
-          fontSize: 14,
-          cellPadding: 8,
-          colWidths: Array.from({ length: cols }, () => columnWidth),
-          rowHeights: Array.from({ length: rows }, () => Math.max(30, rowHeight))
-        }
-      };
     }
 
     if (newElement) {
@@ -2111,7 +2165,7 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
             <EnhancedToolbar
               onInsertElement={addElement}
               onDownloadPresentation={savePresentation}
-              onStartSlideshow={() => setIsSlideshow(true)}
+              onStartSlideshow={startSlideshow}
               keepInsertEnabled={keepInsertEnabled}
               onToggleKeepInsert={handleToggleKeepInsert}
               fileName={fileName}
@@ -2196,10 +2250,12 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
                             y: relativeTop
                           });
                         }
+                        return;
                       } else if (element.type === 'chart') {
                         setHoveredElement(element.id);
                         
                         // Calculate position directly from the event
+
                         const rect = event.currentTarget.getBoundingClientRect();
                         const slideRect = slideRef.current?.getBoundingClientRect();
                         if (slideRect) {
@@ -2212,36 +2268,50 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
                             y: relativeTop
                           });
                         }
-                        
                         setToolbarPosition({ x: 0, y: 0 });
                         setShapeToolbarPosition(null);
-                        setTableToolbarPosition(null);
+                        setImageToolbarPosition(null);
+                        return;
                       } else if (element.type === 'image') {
                         setHoveredElement(element.id);
-                        
+
                         const rect = event.currentTarget.getBoundingClientRect();
                         const slideRect = slideRef.current?.getBoundingClientRect();
                         if (slideRect) {
                           const centerX = rect.left - slideRect.left + rect.width / 2;
                           const clampedX = Math.max(100, Math.min(centerX, slideRect.width - 100));
                           const relativeTop = Math.max(rect.top - slideRect.top - 48, 8);
-                          
+
                           setImageToolbarPosition({
                             x: clampedX,
                             y: relativeTop
                           });
                         }
-                        
+
                         setToolbarPosition({ x: 0, y: 0 });
                         setShapeToolbarPosition(null);
-                        setTableToolbarPosition(null);
-                      } else if (element.type === 'table') {
+                        return;
+                      } else if (element.type === 'shape') {
                         setHoveredElement(element.id);
-                        updateTableToolbarPosition(element.id);
+
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        const slideRect = slideRef.current?.getBoundingClientRect();
+                        if (slideRect) {
+                          const centerX = rect.left - slideRect.left + rect.width / 2;
+                          const clampedX = Math.max(24, Math.min(centerX, slideRect.width - 24));
+                          const relativeTop = Math.max(rect.top - slideRect.top, 0);
+
+                          setShapeToolbarPosition({ x: clampedX, y: relativeTop });
+                        }
+
                         setToolbarPosition({ x: 0, y: 0 });
-                        setShapeToolbarPosition(null);
                         setImageToolbarPosition(null);
+                        return;
                       }
+
+                      setToolbarPosition({ x: 0, y: 0 });
+                      setShapeToolbarPosition(null);
+                      setImageToolbarPosition(null);
                     };
 
                     const handleWrapperEnter = (event) => {
@@ -2249,10 +2319,8 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
                       if (!slideRect) {
                         return;
                       }
-
-                      const rect = event.currentTarget.getBoundingClientRect();
-
                       if (element.type === 'text') {
+                        const rect = event.currentTarget.getBoundingClientRect();
                         const centerX = rect.left - slideRect.left + rect.width / 2;
                         const clampedX = Math.max(
                           TEXT_TOOLBAR_HALF_WIDTH,
@@ -2263,80 +2331,52 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
                           8
                         );
                         setHoveredElement(element.id);
-                        setToolbarPosition({
-                          x: clampedX,
-                          y: relativeTop
-                        });
+                        setToolbarPosition({ x: clampedX, y: relativeTop });
                         setShapeToolbarPosition(null);
-                        return;
-                      }
-
-                      if (element.type === 'shape') {
+                        setImageToolbarPosition(null);
+                      } else if (element.type === 'chart') {
+                        const rect = event.currentTarget.getBoundingClientRect();
                         const centerX = rect.left - slideRect.left + rect.width / 2;
-                        const clampedX = Math.max(24, Math.min(centerX, slideRect.width - 24));
-                        const relativeTop = Math.max(rect.top - slideRect.top, 0);
+                        const clampedX = Math.max(100, Math.min(centerX, slideRect.width - 100));
+                        const relativeTop = Math.max(rect.top - slideRect.top - 48, 8);
                         setHoveredElement(element.id);
-                        setShapeToolbarPosition({
-                          x: clampedX,
-                          y: relativeTop
-                        });
-                        setToolbarPosition({ x: 0, y: 0 });
-                        setTableToolbarPosition(null);
-                        return;
-                      }
-
-                      if (element.type === 'table') {
-                        setHoveredElement(element.id);
-                        updateTableToolbarPosition(element.id);
+                        setChartToolbarPosition({ x: clampedX, y: relativeTop });
                         setToolbarPosition({ x: 0, y: 0 });
                         setShapeToolbarPosition(null);
                         setImageToolbarPosition(null);
+                      } else if (element.type === 'image') {
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        const centerX = rect.left - slideRect.left + rect.width / 2;
+                        const clampedX = Math.max(100, Math.min(centerX, slideRect.width - 100));
+                        const relativeTop = Math.max(rect.top - slideRect.top - 48, 8);
+                        setHoveredElement(element.id);
+                        setImageToolbarPosition({ x: clampedX, y: relativeTop });
+                        setToolbarPosition({ x: 0, y: 0 });
+                        setShapeToolbarPosition(null);
+                      } else if (element.type === 'shape') {
+                        if (selectedElement?.id === element.id) {
+                          const rect = event.currentTarget.getBoundingClientRect();
+                          const centerX = rect.left - slideRect.left + rect.width / 2;
+                          const clampedX = Math.max(24, Math.min(centerX, slideRect.width - 24));
+                          const relativeTop = Math.max(rect.top - slideRect.top, 0);
+                          setHoveredElement(element.id);
+                          setShapeToolbarPosition({ x: clampedX, y: relativeTop });
+                          setToolbarPosition({ x: 0, y: 0 });
+                          setImageToolbarPosition(null);
+                        }
                       }
                     };
 
-                    const handleWrapperLeave = (event) => {
-                      if (element.type === 'text') {
-                        if (selectedElement?.id === element.id) {
-                          return;
-                        }
-                        const next = event?.relatedTarget;
-                        if (next && typeof next.closest === 'function' && next.closest('.text-toolbar-wrapper')) {
-                          return;
-                        }
-                        setHoveredElement((current) =>
-                          current === element.id ? null : current
-                        );
-                        return;
-                      }
-
-                      if (element.type === 'shape') {
-                        const next = event?.relatedTarget;
-                        if (
-                          next &&
-                          typeof next.closest === 'function' &&
-                          (next.closest('.shape-toolbar-wrapper') || next.closest('[data-shape-element="true"]'))
-                        ) {
-                          return;
-                        }
+                    const handleWrapperLeave = () => {
+                      if (selectedElement?.id !== element.id) {
                         setHoveredElement((current) => (current === element.id ? null : current));
-                        setShapeToolbarPosition(null);
-                        return;
-                      }
-
-                      if (element.type === 'table') {
-                        if (selectedElement?.id === element.id) {
-                          return;
+                        if (element.type === 'shape') {
+                          setShapeToolbarPosition(null);
+                        } else if (element.type === 'chart') {
+                          setChartToolbarPosition(null);
+                        } else if (element.type === 'image') {
+                          setImageToolbarPosition(null);
                         }
-                        const next = event?.relatedTarget;
-                        if (
-                          next &&
-                          typeof next.closest === 'function' &&
-                          next.closest('.table-toolbar-wrapper')
-                        ) {
-                          return;
-                        }
-                        setHoveredElement((current) => (current === element.id ? null : current));
-                        setTableToolbarPosition(null);
                       }
                     };
 
@@ -2380,16 +2420,10 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
                     const minWidth =
                       element.type === 'text' 
                         ? MIN_TEXT_WIDTH 
-                        : element.type === 'table'
-                        ? MIN_TABLE_WIDTH
                         : MIN_ELEMENT_SIZE;
                     const minHeight =
                       element.type === 'text'
                         ? MIN_TEXT_HEIGHT
-                        : element.type === 'chart'
-                        ? MIN_CHART_HEIGHT
-                        : element.type === 'table'
-                        ? MIN_TABLE_HEIGHT
                         : MIN_ELEMENT_SIZE;
                     const lockAspectRatio =
                       element.type === 'image' && element.maintainAspect
@@ -2426,19 +2460,28 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
                                 transform: `scale(${flipScaleX}, ${flipScaleY})`,
                                 transformOrigin: 'center center'
                               };
+                        const baseFontSize = Number.isFinite(element.fontSize) ? element.fontSize : 20;
+                        const scaledFontSize = Math.max(Math.round(baseFontSize * textScale), 10);
                         return (
                           <div
                             className="text-element-content-wrapper"
                             style={flipStyle}
                           >
                             {!isSelected && isEmptyText && (
-                              <div className="text-placeholder-visual">
+                              <div
+                                className="text-placeholder-visual"
+                                style={{
+                                  fontSize: `${scaledFontSize}px`,
+                                  lineHeight: element.lineHeight ? String(element.lineHeight) : '1.3'
+                                }}
+                              >
                                 {element.placeholder || 'Click to add text'}
                               </div>
                             )}
                             <RichTextEditor
                               element={element}
                               isSelected={isSelected}
+                              textScale={textScale}
                               onContentChange={(html, plainTextValue) => {
                                 updateElement(element.id, {
                                   text: html,
@@ -2535,7 +2578,7 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
                             element.shape === 'triangle'
                               ? 'polygon(50% 0%, 0% 100%, 100% 100%)'
                               : element.shape === 'arrow'
-                              ? 'polygon(0% 40%, 70% 40%, 70% 20%, 100% 50%, 70% 80%, 70% 60%, 0% 60%)'
+                              ? 'polygon(0% 20%, 60% 20%, 60% 0%, 100% 50%, 60% 100%, 60% 80%, 0% 80%)'
                               : element.shape === 'star'
                               ? 'polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)'
                               : 'none'
@@ -2556,19 +2599,6 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
                               onUpdate={(updatedElement) => updateElement(element.id, updatedElement)}
                               onClose={() => setEditingImage(null)}
                               isEditing={editingImage === element.id}
-                            />
-                          </div>
-                        );
-                      }
-
-                      if (element.type === 'table') {
-                        return (
-                          <div className="table-element-content">
-                            <TableComponent
-                              element={element}
-                              onUpdate={updateElement}
-                              onDelete={deleteElement}
-                              isSelected={isSelected}
                             />
                           </div>
                         );
@@ -2609,8 +2639,7 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
                           element.type !== 'chart' &&
                           element.type !== 'text' &&
                           element.type !== 'shape' &&
-                          element.type !== 'image' &&
-                          element.type !== 'table' && (
+                          element.type !== 'image' && (
                           <div className="element-controls">
                             <button
                               type="button"
@@ -2688,20 +2717,6 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
                     />
                   )}
 
-                  {tableToolbarPosition && selectedElement?.type === 'table' && (
-                    <TableToolbar
-                      element={selectedElement}
-                      position={tableToolbarPosition}
-                      isVisible
-                      onUpdate={updateElement}
-                      onDelete={() => deleteElement(selectedElement.id)}
-                      onDismiss={() => {
-                        setTableToolbarPosition(null);
-                        setHoveredElement(null);
-                      }}
-                    />
-                  )}
-
                   {imageToolbarPosition && selectedElement?.type === 'image' && (
                     <ImageToolbar
                       element={selectedElement}
@@ -2758,9 +2773,19 @@ const PresentationApp = ({ onExit, initialPresentationId }) => {
                 <span className="slideshow-title">Presentation Mode</span>
               </div>
               <div className="slideshow-actions">
-                <button 
+                <button
+                  className={`slideshow-btn ${isSlideshowPaused ? 'resume' : 'pause'}`}
+                  onClick={toggleSlideshowPause}
+                  title={isSlideshowPaused ? 'Resume Slideshow (Space)' : 'Pause Slideshow (Space)'}
+                >
+                  {isSlideshowPaused ? '▶' : '⏸'}
+                </button>
+                <button
                   className="slideshow-btn exit"
-                  onClick={() => setIsSlideshow(false)}
+                  onClick={() => {
+                    setIsSlideshowPaused(false);
+                    setIsSlideshow(false);
+                  }}
                   title="Exit Slideshow (Esc)"
                 >
                   ✕

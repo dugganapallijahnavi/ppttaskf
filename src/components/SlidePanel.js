@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import './SlidePanel.css';
 import { SLIDE_LAYOUTS, DEFAULT_LAYOUT_ID } from '../data/slideLayouts';
 
@@ -35,8 +35,22 @@ const ensureNumber = (value) => {
 
 const SLIDE_BASE_WIDTH = 960;
 const SLIDE_BASE_HEIGHT = 540;
-const THUMBNAIL_WIDTH = 200;
-const THUMBNAIL_HEIGHT = Math.round((SLIDE_BASE_HEIGHT / SLIDE_BASE_WIDTH) * THUMBNAIL_WIDTH);
+const THUMBNAIL_WIDTH_DEFAULT = 200;
+const getThumbnailWidthForViewport = (width) => {
+  if (!Number.isFinite(width)) {
+    return THUMBNAIL_WIDTH_DEFAULT;
+  }
+  if (width <= 600) {
+    return 140;
+  }
+  if (width <= 900) {
+    return 160;
+  }
+  if (width <= 1200) {
+    return 180;
+  }
+  return THUMBNAIL_WIDTH_DEFAULT;
+};
 
 const extractChartPreview = (element) => {
   const chartType = element.chartType || element.chartData?.type || 'bar';
@@ -117,8 +131,36 @@ const SlidePanel = ({
   const [dragIndex, setDragIndex] = useState(null);
   const [dragOverIndex, setDragOverIndex] = useState(null);
   const [dragPosition, setDragPosition] = useState(null);
-  const scaleX = THUMBNAIL_WIDTH / SLIDE_BASE_WIDTH;
-  const scaleY = THUMBNAIL_HEIGHT / SLIDE_BASE_HEIGHT;
+  const [viewportWidth, setViewportWidth] = useState(() => {
+    if (typeof window === 'undefined') {
+      return 1440;
+    }
+    return window.innerWidth || 1440;
+  });
+  const [thumbnailWidth, setThumbnailWidth] = useState(() => getThumbnailWidthForViewport(viewportWidth));
+  const thumbnailHeight = useMemo(
+    () => Math.round((SLIDE_BASE_HEIGHT / SLIDE_BASE_WIDTH) * thumbnailWidth),
+    [thumbnailWidth]
+  );
+  const scaleX = useMemo(() => thumbnailWidth / SLIDE_BASE_WIDTH, [thumbnailWidth]);
+  const scaleY = useMemo(() => thumbnailHeight / SLIDE_BASE_HEIGHT, [thumbnailHeight]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const handleResize = () => {
+      const nextWidth = window.innerWidth || 1440;
+      setViewportWidth(nextWidth);
+      setThumbnailWidth(getThumbnailWidthForViewport(nextWidth));
+    };
+
+    window.addEventListener('resize', handleResize);
+    handleResize();
+
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   useEffect(() => {
     if (!isLayoutPickerOpen) {
@@ -312,8 +354,8 @@ const SlidePanel = ({
                         : slide.background?.color || '#ffffff',
                   position: 'relative',
                   overflow: 'hidden',
-                  width: `${THUMBNAIL_WIDTH}px`,
-                  height: `${THUMBNAIL_HEIGHT}px`
+                  width: `${thumbnailWidth}px`,
+                  height: `${thumbnailHeight}px`
                 }}
               >
                 {previewImage ? (
@@ -433,10 +475,10 @@ const SlidePanel = ({
                       const { chartType, labels, datasets } = extractChartPreview(element);
                       const chartWidth = scaledWidth !== null
                         ? scaledWidth
-                        : THUMBNAIL_WIDTH * 0.6;
+                        : thumbnailWidth * 0.6;
                       const chartHeight = scaledHeight !== null
                         ? scaledHeight
-                        : THUMBNAIL_HEIGHT * 0.6;
+                        : thumbnailHeight * 0.6;
 
                       const chartStyle = {
                         ...baseStyle,

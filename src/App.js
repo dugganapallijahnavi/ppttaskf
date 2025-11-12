@@ -39,7 +39,7 @@ const Landing = ({
   return (
     <div className="landing-page">
       <header className="landing-header">
-        <h1 className="landing-title">Create Stunning Presentations</h1>
+        <h1 className="landing-title">Craft Impactful Presentations</h1>
         <p className="landing-subtitle">
           Build slides with charts, tables, images, and beautiful typography. Save automatically and pick up right where you left off.
         </p>

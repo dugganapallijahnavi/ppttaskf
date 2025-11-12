@@ -116,7 +116,8 @@ const RichTextEditor = React.memo(({
   onFocus,
   onBlur,
   onEditorReady,
-  placeholder = 'Write something'
+  placeholder = 'Write something',
+  textScale = 1
 }) => {
   const [, forceUpdate] = useState(0);
   const lastSyncedContentRef = useRef(element?.text || '');
@@ -239,9 +240,12 @@ const RichTextEditor = React.memo(({
       decorations.push('line-through');
     }
 
+    const baseFontSize = element.fontSize || 18;
+    const effectiveFontSize = Math.max(Math.round(baseFontSize * textScale), 10);
+
     return {
       fontFamily: element.fontFamily || 'Inter, sans-serif',
-      fontSize: element.fontSize ? `${element.fontSize}px` : '18px',
+      fontSize: `${effectiveFontSize}px`,
       color: element.color || '#f9fafb',
       textAlign: element.textAlign || 'left',
       fontWeight: element.bold ? 700 : (element.fontWeight || 400),
@@ -250,7 +254,7 @@ const RichTextEditor = React.memo(({
       lineHeight: element.lineHeight ? String(element.lineHeight) : '1.3',
       backgroundColor: element.backgroundColor || 'transparent'
     };
-  }, [element]);
+  }, [element, textScale]);
 
   if (!element) {
     return null;
@@ -274,7 +278,8 @@ const RichTextEditor = React.memo(({
     prevProps.element?.italic === nextProps.element?.italic &&
     prevProps.element?.underline === nextProps.element?.underline &&
     prevProps.isSelected === nextProps.isSelected &&
-    prevProps.placeholder === nextProps.placeholder
+    prevProps.placeholder === nextProps.placeholder &&
+    prevProps.textScale === nextProps.textScale
   );
 });
 

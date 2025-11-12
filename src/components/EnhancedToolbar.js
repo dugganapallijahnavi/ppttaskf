@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import './EnhancedToolbar.css';
 
 const INSERT_OPTIONS = [
@@ -45,9 +45,37 @@ const EnhancedToolbar = ({
   const [isDesignPanelOpen, setIsDesignPanelOpen] = useState(false);
   const panelRef = useRef(null);
   const toolbarRef = useRef(null);
+  const toolbarLeftRef = useRef(null);
   const designPanelRef = useRef(null);
   const filesMenuRef = useRef(null);
   const [isFilesMenuOpen, setIsFilesMenuOpen] = useState(false);
+  const insertButtonRefs = useRef({});
+  const [panelPosition, setPanelPosition] = useState({ left: 0 });
+
+  const updatePanelPosition = useCallback((type) => {
+    const buttonNode = insertButtonRefs.current?.[type];
+    const containerNode = toolbarLeftRef.current;
+    if (!buttonNode || !containerNode) {
+      return;
+    }
+
+    const buttonRect = buttonNode.getBoundingClientRect();
+    const containerRect = containerNode.getBoundingClientRect();
+    setPanelPosition({
+      left: buttonRect.left - containerRect.left + buttonRect.width / 2
+    });
+  }, []);
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (activePanel === 'shape' || activePanel === 'chart') {
+        updatePanelPosition(activePanel);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [activePanel, updatePanelPosition]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -91,7 +119,12 @@ const EnhancedToolbar = ({
       onFilesMenuToggle?.(false);
     }
     if (type === 'shape' || type === 'chart') {
-      setActivePanel((prev) => (prev === type ? null : type));
+      if (activePanel === type) {
+        setActivePanel(null);
+      } else {
+        updatePanelPosition(type);
+        setActivePanel(type);
+      }
       return;
     }
 
@@ -163,7 +196,7 @@ const EnhancedToolbar = ({
       case 'text':
         return 'T';
       case 'image':
-        return '🖼';
+        return <span className="image-icon" aria-hidden="true" />;
       case 'shape':
         return '◇';
       case 'chart':
@@ -198,7 +231,7 @@ const EnhancedToolbar = ({
 
   return (
     <div className="enhanced-toolbar" ref={toolbarRef}>
-      <div className="toolbar-left">
+      <div className="toolbar-left" ref={toolbarLeftRef}>
         <div className="files-menu-wrapper" ref={filesMenuRef}>
           <button
             type="button"
@@ -216,7 +249,6 @@ const EnhancedToolbar = ({
           >
             <span className="button-icon" aria-hidden="true">📁</span>
             <span className="button-text">Files</span>
-            <span className="files-caret" aria-hidden="true">▾</span>
           </button>
           {isFilesMenuOpen && (
             <div className="files-menu">
@@ -258,6 +290,13 @@ const EnhancedToolbar = ({
             type="button"
             className={`toolbar-button icon-button ${activePanel === option.key ? 'active' : ''}`}
             onClick={() => handlePrimaryInsert(option.key)}
+            ref={(node) => {
+              if (node) {
+                insertButtonRefs.current[option.key] = node;
+              } else {
+                delete insertButtonRefs.current[option.key];
+              }
+            }}
           >
             <span className="button-icon">{getButtonIcon(option.key)}</span>
             <span className="button-text">{option.label.charAt(0) + option.label.slice(1).toLowerCase()}</span>
@@ -288,7 +327,11 @@ const EnhancedToolbar = ({
           <span className="button-text">Redo</span>
         </button>
         {activePanel && (
-          <div className="toolbar-panel" ref={panelRef}>
+          <div
+            className="toolbar-panel"
+            ref={panelRef}
+            style={{ left: panelPosition.left, transform: 'translateX(-50%)' }}
+          >
             <div className="panel-options">{renderPanelContent()}</div>
           </div>
         )}

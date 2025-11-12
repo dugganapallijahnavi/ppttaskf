@@ -438,6 +438,7 @@ const TextToolbar = ({
     onDelete(element.id);
   }, [element, onDelete, closeMenus]);
 
+
   if (!isVisible || !element) {
     return null;
   }
